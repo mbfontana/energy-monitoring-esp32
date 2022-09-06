@@ -1,16 +1,17 @@
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
+#include "math.h"
 
 #define SCT013  34
 #define ZMPT10  35
-#define FILTER_LEN  50
+#define FILTER_LEN  15
 
 uint32_t AN_Pot1_Buffer[FILTER_LEN] = {0};
 int AN_Pot1_i = 0;
 int AN_Pot1_Raw = 0;
 int AN_Pot1_Filtered = 0;
-int current_samples[384];
-int voltage_samples[384];
+float current_samples[384];
+float voltage_samples[384];
 int i = 0, j = 0, aux=0;
 unsigned long begin_time=0, delta=0;
 long max_current_value;
@@ -36,30 +37,35 @@ void loop() {
 
       // Current and Voltage sampling
       for (i = 0; i < 384; i++) {
-        begin_time = micros();
-        
+        begin_time = micros();//ADC_ATTEN_6db
         current_samples[i] = adc1_get_raw(ADC1_CHANNEL_6);
-        current_samples[i] = readADC_Avg(current_samples[i]);
+        //current_samples[i] = readADC_Avg(current_samples[i]);
         
         if (max_current_value < current_samples[i]) max_current_value = current_samples[i];
         
         voltage_samples[i] = adc1_get_raw(ADC1_CHANNEL_7);
-        voltage_samples[i] = readADC_Avg(voltage_samples[i]);
+        //voltage_samples[i] = readADC_Avg(voltage_samples[i]);
         
         if (max_voltage_value < voltage_samples[i]) max_voltage_value = voltage_samples[i];
         
-        while((micros() - begin_time)<130);
+        while((micros() - begin_time) < 130);
       }
+
+       Serial.println("Max Current: ");
+       Serial.println(max_current_value);
+       //Serial.println("Max Voltage: ");
+       //Serial.println(max_voltage_value);
+      
       
        // peak_current = max_current_value - 456;
        // peak_current = peak_current * 0.32258065; // (3.3 / 1023) * 100
-       RMS_current = convert_to_RMS(current_samples);
-       Serial.println("RMS Current: ");
-       Serial.println(RMS_current);
+       RMS_current = get_I_RMS(current_samples);
+       //Serial.println("RMS Current: ");
+       //Serial.println(RMS_current);
 
        // peak_voltage = max_voltage_value - 453;
        // peak_voltage = peak_voltage * ;
-       RMS_voltage = convert_to_RMS(current_samples);
+       RMS_voltage = get_V_RMS(voltage_samples);
        Serial.println("RMS Voltage: ");
        Serial.println(RMS_voltage);
        
@@ -83,14 +89,26 @@ uint32_t readADC_Avg(int ADC_Raw)
   return (Sum/FILTER_LEN);
 }
 
-uint32_t convert_to_RMS(int samples)
+uint32_t get_I_RMS(float samples[])
 {
   int i = 0;
-  int one_wave_cycle = 128;
-  uint32_t sum = 0;
+  int one_wave_cycle = 384;
+  float sum = 0;
   
   for(i = 0; i < one_wave_cycle; i++){
-    sum += sq(samples[i]);
+    sum += pow(((samples[i]-463)*0.322581), 2);
   }
-  return sqrt(sum/one_wave_cycle);
+  return (sqrt(sum/one_wave_cycle));
+}
+
+uint32_t get_V_RMS(float samples[])
+{
+  int i = 0;
+  int one_wave_cycle = 384;
+  float sum = 0;
+  
+  for(i = 0; i < one_wave_cycle; i++){
+    sum += pow(((samples[i]-463)*2.4), 2);
+  }
+  return (sqrt(sum/one_wave_cycle));
 }
