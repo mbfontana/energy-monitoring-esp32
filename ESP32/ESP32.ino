@@ -7,10 +7,6 @@
 #define SCT013  34
 #define ZMPT101  35
 
-//////////////////////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////
-
 unsigned int I_offset = 0;
 unsigned int V_offset = 0;
 float Vsensitivity = 0.00188679245; // Calibração
@@ -47,7 +43,6 @@ void loop() {
   }
 
   I_offset = I_accum/100;
-  I_offset = I_offset;  
   V_offset = V_accum/100;
   struct RMS valuesRMS = getRMS(V_offset, I_offset);
   float Irms = valuesRMS.I;
@@ -69,12 +64,6 @@ void loop() {
   Serial.println(Q);
   Serial.print("FP: ");
   Serial.println(FP);
-  Serial.print("Frequencies: ");
-  Serial.println(f_peaks[0]);
-  Serial.println(f_peaks[1]);
-  Serial.println(f_peaks[2]);
-  Serial.println(f_peaks[3]);
-  Serial.println(f_peaks[4]);
   Serial.println("");
 
   delay(5000);
