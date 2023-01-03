@@ -1,114 +1,111 @@
+// https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
-#include "math.h"
+#include "arduinoFFT.h"
 
 #define SCT013  34
-#define ZMPT10  35
-#define FILTER_LEN  15
+#define ZMPT101  35
 
-uint32_t AN_Pot1_Buffer[FILTER_LEN] = {0};
-int AN_Pot1_i = 0;
-int AN_Pot1_Raw = 0;
-int AN_Pot1_Filtered = 0;
-float current_samples[384];
-float voltage_samples[384];
-int i = 0, j = 0, aux=0;
-unsigned long begin_time=0, delta=0;
-long max_current_value;
-long max_voltage_value;
-float peak_current;
-float RMS_current;
-float peak_voltage;
-float RMS_voltage;
+//////////////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////////////
+
+unsigned int I_offset = 0;
+unsigned int V_offset = 0;
+float Vsensitivity = 0.00188679245; // Calibração
+float Isensitivity = 0.01; // Calibração
+float ADCScale = 1023.0;
+float Vref = 3.25;
+
+float V_conversion_factor = ADCScale * Vref / Vsensitivity;
+float I_conversion_factor = ADCScale * Vref / Isensitivity;
+
+struct RMS {
+  float I;
+  float V;
+  float P;
+};
 
 void setup() {
+  adc1_config_width(ADC_WIDTH_10Bit);
   pinMode(SCT013, INPUT);
-  pinMode(ZMPT10, INPUT);
+  pinMode(ZMPT101, INPUT);
   Serial.begin(115200);
 }
 
 void loop() {
-      max_current_value = 0;
-      max_voltage_value = 0;
-      
-      adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
-      adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_11);
-      adc1_config_width(ADC_WIDTH_10Bit);
 
-      // Current and Voltage sampling
-      for (i = 0; i < 384; i++) {
-        begin_time = micros();//ADC_ATTEN_6db
-        current_samples[i] = adc1_get_raw(ADC1_CHANNEL_6);
-        //current_samples[i] = readADC_Avg(current_samples[i]);
-        
-        if (max_current_value < current_samples[i]) max_current_value = current_samples[i];
-        
-        voltage_samples[i] = adc1_get_raw(ADC1_CHANNEL_7);
-        //voltage_samples[i] = readADC_Avg(voltage_samples[i]);
-        
-        if (max_voltage_value < voltage_samples[i]) max_voltage_value = voltage_samples[i];
-        
-        while((micros() - begin_time) < 130);
-      }
-
-       Serial.println("Max Current: ");
-       Serial.println(max_current_value);
-       //Serial.println("Max Voltage: ");
-       //Serial.println(max_voltage_value);
-      
-      
-       // peak_current = max_current_value - 456;
-       // peak_current = peak_current * 0.32258065; // (3.3 / 1023) * 100
-       RMS_current = get_I_RMS(current_samples);
-       //Serial.println("RMS Current: ");
-       //Serial.println(RMS_current);
-
-       // peak_voltage = max_voltage_value - 453;
-       // peak_voltage = peak_voltage * ;
-       RMS_voltage = get_V_RMS(voltage_samples);
-       Serial.println("RMS Voltage: ");
-       Serial.println(RMS_voltage);
-       
-       delay(2000);
-}
-
-uint32_t readADC_Avg(int ADC_Raw)
-{
-  int i = 0;
-  uint32_t Sum = 0;
+  unsigned int V_accum = 0;
+  unsigned int I_accum = 0;
   
-  AN_Pot1_Buffer[AN_Pot1_i++] = ADC_Raw;
-  if(AN_Pot1_i == FILTER_LEN)
+  for(int i=0; i<100; i++)
   {
-    AN_Pot1_i = 0;
+    I_accum += adc1_get_raw(ADC1_CHANNEL_6);
+    V_accum += adc1_get_raw(ADC1_CHANNEL_7);
+    delayMicroseconds(1000); // 128 amostras por ciclo
   }
-  for(i=0; i<FILTER_LEN; i++)
-  {
-    Sum += AN_Pot1_Buffer[i];
-  }
-  return (Sum/FILTER_LEN);
+
+  I_offset = I_accum/100;
+  I_offset = I_offset;  
+  V_offset = V_accum/100;
+  struct RMS valuesRMS = getRMS(V_offset, I_offset);
+  float Irms = valuesRMS.I;
+  float Vrms = valuesRMS.V;
+  float P = valuesRMS.P; // Potência Ativa
+  float S = Vrms * Irms; // Potência Aparente
+  float Q = sqrt((S*S)-(P*P)); // Potência Reativa
+  float FP = S / P; // Fator de potência
+
+  Serial.print("Irms: ");
+  Serial.println(Irms);
+  Serial.print("Vrms: ");
+  Serial.println(Vrms);
+  Serial.print("S: ");
+  Serial.println(S);
+  Serial.print("P: ");
+  Serial.println(P);
+  Serial.print("Q: ");
+  Serial.println(Q);
+  Serial.print("FP: ");
+  Serial.println(FP);
+  Serial.print("Frequencies: ");
+  Serial.println(f_peaks[0]);
+  Serial.println(f_peaks[1]);
+  Serial.println(f_peaks[2]);
+  Serial.println(f_peaks[3]);
+  Serial.println(f_peaks[4]);
+  Serial.println("");
+
+  delay(5000);
 }
 
-uint32_t get_I_RMS(float samples[])
-{
-  int i = 0;
-  int one_wave_cycle = 384;
-  float sum = 0;
-  
-  for(i = 0; i < one_wave_cycle; i++){
-    sum += pow(((samples[i]-463)*0.322581), 2);
-  }
-  return (sqrt(sum/one_wave_cycle));
-}
+struct RMS getRMS(unsigned int V_offset, unsigned int I_offset) {
 
-uint32_t get_V_RMS(float samples[])
-{
-  int i = 0;
-  int one_wave_cycle = 384;
-  float sum = 0;
-  
-  for(i = 0; i < one_wave_cycle; i++){
-    sum += pow(((samples[i]-463)*2.4), 2);
-  }
-  return (sqrt(sum/one_wave_cycle));
+  struct RMS valueRMS;
+  uint32_t Vsum = 0, Isum = 0, Psum = 0, measurements_count = 0;
+  int32_t Vnow, Inow, Pnow;
+
+  while (measurements_count < 64) {
+    Inow = (adc1_get_raw(ADC1_CHANNEL_6) - I_offset);
+    Vnow = (adc1_get_raw(ADC1_CHANNEL_7) - V_offset);     
+    Inow = Inow / ADCScale * Vref / Isensitivity;
+    Vnow = Vnow / ADCScale * Vref / Vsensitivity;
+    Pnow = Vnow*Inow;
+    Isum += Inow*Inow;
+    Vsum += Vnow*Vnow;
+    Psum += Pnow*Pnow;
+    measurements_count++;
+    delayMicroseconds(266);
+  } // 3 ciclos completos (50ms)
+
+  float Irms = sqrt(Isum / measurements_count) - 1;
+  float Vrms = sqrt(Vsum / measurements_count);
+  float Prms = sqrt(Psum / measurements_count);
+ 
+  valueRMS.I = Irms;  
+  valueRMS.V = Vrms; 
+  valueRMS.P = Prms; 
+
+  return valueRMS;
 }
