@@ -1,8 +1,8 @@
 {
     "wifi_ssid": "Fontana",
     "wifi_password": "@678fontana786",
-    "mysql_host": "localhost",
+    "mysql_server": "localhost",
     "mysql_user": "root",
-    "mysql_password": "",
+    "mysql_password": "Nanco@09",
     "mysql_database": "esp32"
 }
