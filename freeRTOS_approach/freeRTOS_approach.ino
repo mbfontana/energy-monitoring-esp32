@@ -1,11 +1,12 @@
-#include <stdio.h>
-#include <stdlib.h>
+#include <SPIFFS.h>
+
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
-#include "mysql/mysql.h"    // Library to send data to mySQL server
-#include "esp_wifi.h"       // Library to connect ESP32 to the local gateway (WiFi router)
-#include "esp_event_loop.h"
 #include "cJSON.h"          // Library to load and read the config JSON file
+#include <WiFi.h>
+#include <MySQL_Connection.h>
+#include <MySQL_Cursor.h>
+#include <SPIFFS.h>
 
 // constantes 
 #define GRID_FREQUENCY 60                         // frequência da fundamental da rede elétrica
@@ -99,10 +100,15 @@ static double Iu=0;
 
 //static double PF=0, VF=0, QF=0;
 
-// MySQL and WiFi connection
-static const char *TAG = "mysql";
-static const char *WIFI_SSID = "your_wifi_ssid";
-static const char *WIFI_PASS = "your_wifi_password";
+// Wi-Fi credentials
+const char* ssid;
+const char* password;
+
+// MySQL credentials
+const char* server;
+const char* user;
+const char* mysql_password;
+const char* database;
 
 // definiçoes dos núcleos
 // %%% podemos usar os dois núcleos agora
@@ -589,97 +595,80 @@ void CPT(double ua, double ia)
  
 }
 
-void connect_to_wifi(char ssid, char password)
-{
-    // Check if environment variables are set
-    if (ssid == NULL || password == NULL) {
-        ESP_LOGE(TAG, "Wi-Fi credentials not set in configuration file");
-        return;
-    }
-
-    tcpip_adapter_init();
-    esp_event_loop_create_default();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&cfg);
-    esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = ssid,
-            .password = password,
-        },
-    };
-    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    esp_wifi_start();
-}
-
 //*********************************************//
 // TAREFAS - FREERTOS
 //*********************************************//
 
-// Task to connecet and send data to MySQL server
-void mysqlConnection(void *pvParameters)
-{
-    MYSQL *conn;
-    MYSQL_RES *res;
-    MYSQL_ROW row;
-
-    // Read configuration file
-    FILE *f = fopen(CONFIG_FILE_PATH, "r");
-    if (!f) {
-        printf("Failed to open configuration file\n");
-        vTaskDelete(NULL);
-    }
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *config_json = (char*)malloc(file_size + 1);
-    fread(config_json, 1, file_size, f);
-    fclose(f);
-    config_json[file_size] = '\0';
-
-    // Parse configuration file
-    cJSON *root           = cJSON_Parse(config_json);
-    char *wifi_ssid       = cJSON_GetObjectItem(root, "wifi_ssid")->valuestring;
-    char *wifi_password   = cJSON_GetObjectItem(root, "wifi_password")->valuestring;
-    char *mysql_host      = cJSON_GetObjectItem(root, "mysql_host")->valuestring;
-    char *mysql_user      = cJSON_GetObjectItem(root, "mysql_user")->valuestring;
-    char *mysql_password  = cJSON_GetObjectItem(root, "mysql_password")->valuestring;
-    char *mysql_database  = cJSON_GetObjectItem(root, "mysql_database")->valuestring;
-
-    // Connect to Wi-Fi
-    connect_to_wifi(wifi_ssid, wifi_password);
-
-    // Connect to MySQL server
-    conn = mysql_init(NULL);
-    if (!mysql_real_connect(conn, mysql_host, mysql_user, mysql_password, mysql_database, 0, NULL, 0)) {
-        printf("%s\n", mysql_error(conn));
-        mysql_close(conn);
-        vTaskDelete(NULL);
-    }
-
-    // Insert data into MySQL table
-    if (mysql_query(conn, "INSERT INTO (tablename) VALUES (some data)")) {
-        printf("%s\n", mysql_error(conn));
-        mysql_close(conn);
-        vTaskDelete(NULL);
-    }
-
-    // Query data from MySQL table
-    if (mysql_query(conn, "SELECT * FROM (tablename)")) {
-        printf("%s\n", mysql_error(conn));
-        mysql_close(conn);
-        vTaskDelete(NULL);
-    }
-
-    res = mysql_use_result(conn);
-    while ((row = mysql_fetch_row(res)) != NULL) {
-        printf("%s\n", row[0]);
-    }
-    mysql_free_result(res);
-    mysql_close(conn);
-
+void connectToWifi(void* parameter) {
+  // Read the configuration file and get Wi-Fi credentials
+  File configFile = SPIFFS.open("/config.json", "r");
+  if (!configFile) {
+    Serial.println("Failed to open config file");
     vTaskDelete(NULL);
+    return;
+  }
+  size_t configSize = configFile.size();
+  char* configBuffer = new char[configSize + 1];
+  configFile.readBytes(configBuffer, configSize);
+  configBuffer[configSize] = '\0';
+  cJSON* root = cJSON_Parse(configBuffer);
+  ssid = cJSON_GetObjectItem(root, "wifi_ssid")->valuestring;
+  password = cJSON_GetObjectItem(root, "wifi_password")->valuestring;
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+  }
+  Serial.println("Connected to Wi-Fi");
+
+  vTaskDelete(NULL);
+}
+
+// Task to connecet and send data to MySQL server
+void connectToMysql(void* parameter) {
+   // Read the configuration file and get MySQL credentials
+  File configFile = SPIFFS.open("/config.json", "r");
+  if (!configFile) {
+    Serial.println("Failed to open config file");
+    vTaskDelete(NULL);
+    return;
+  }
+  size_t configSize = configFile.size();
+  char* configBuffer = new char[configSize + 1];
+  configFile.readBytes(configBuffer, configSize);
+  configBuffer[configSize] = '\0';
+  
+  cJSON* root = cJSON_Parse(configBuffer);
+  server = cJSON_GetObjectItem(root, "mysql_server")->valuestring;
+  user = cJSON_GetObjectItem(root, "mysql_user")->valuestring;
+  mysql_password = cJSON_GetObjectItem(root, "mysql_password")->valuestring;
+  database = cJSON_GetObjectItem(root, "mysql_database")->valuestring;
+
+  // Connect to MySQL server
+  MySQL_Connection conn((WiFiClient&)*new WiFiClient());
+  if (conn.connect(server, 3306, user, mysql_password)) {
+    Serial.println("Connected to MySQL server");
+  }
+  else {
+    Serial.println("Connection failed");
+  }
+
+  // Select database
+  MySQL_Cursor* cursor = new MySQL_Cursor(&conn);
+  cursor->execute(String("USE ") + database);
+  delete cursor;
+
+  vTaskDelete(NULL);
+}
+
+void sendDataToMysql(void* parameter) {
+  // Insert data into MySQL table
+  MySQL_Cursor* cursor = new MySQL_Cursor(&conn);
+  cursor->execute(String("INSERT INTO mytable (col1, col2, col3) VALUES ('val1', 'val2', 'val3')"));
+  delete cursor;
+
+  vTaskDelete(NULL);
 }
 
 // Tarefa do terminal serial (doCLI)
@@ -1120,9 +1109,12 @@ void setup() {
                           8000, NULL, 2,
                           &i_processing_task, pro_cpu);
 
-  xTaskCreatePinnedToCore(&mysqlConnection, "mysqlConnection",
-                          2048, NULL, 5,
-                          NULL, app_cpu);
+  xTaskCreatePinnedToCore(connectToWifi, "ConnectToWifi",
+                          10000, NULL, 1, NULL, app_cpu);
+  xTaskCreatePinnedToCore(connectToMysql, "ConnectToMysql",
+                          10000, NULL, 1, NULL, app_cpu);
+  xTaskCreatePinnedToCore(sendDataToMysql, "SendDataToMysql",
+                          10000, NULL, 1, NULL, app_cpu);
                           
   vTaskDelete(NULL);
 }
