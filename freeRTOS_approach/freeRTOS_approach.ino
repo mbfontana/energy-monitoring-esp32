@@ -658,10 +658,20 @@ void httpRequestTask(void *pvParameters)
     {
       Serial.println("Connected to server");
 
-      // Use HTTPS in production
+      // Set the request body
+      String requestBody = "";
+      requestBody += "voltage=";
+      requestBody += 999;
+      requestBody += "&current=";
+      requestBody += 888;
+      requestBody += "&collect_time=";
+      requestBody += "2020-12-20 20:20:20.000";
+      Serial.println(requestBody);
+
       HTTPClient http;
-      http.begin(client, "http://192.168.0.156", 3001, "/api/teste");
-      int httpResponseCode = http.GET();
+      http.begin(client, "http://192.168.0.156", 3001, "/api/hairdryer");
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      int httpResponseCode = http.POST(requestBody);
 
       if (httpResponseCode > 0)
       {
