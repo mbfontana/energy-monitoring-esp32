@@ -11,11 +11,10 @@
 #define SWAP(a, b) \
   tempr = (a);     \
   (a) = (b);       \
-  (b) = tempr                           // constante/função da rede elétrica
-#define TSH 1 / SAMPLING_FREQUENCY      // tempo da amostragem = 1/FREQUENCIA_AMOSTRAGEM
-#define FILTER_LEN 4                    // tamanho do filtro da tensao
-#define FILTER_LEN_CURR FILTER_LEN      // tamanho do filtro da corrente
-#define CONFIG_FILE_PATH "/config.json" // Path for the configuration JSON file
+  (b) = tempr                      // constante/função da rede elétrica
+#define TSH 1 / SAMPLING_FREQUENCY // tempo da amostragem = 1/FREQUENCIA_AMOSTRAGEM
+#define FILTER_LEN 4               // tamanho do filtro da tensao
+#define FILTER_LEN_CURR FILTER_LEN // tamanho do filtro da corrente
 
 // tipos enumerados de tamanhos
 enum
@@ -116,8 +115,12 @@ static double Iu = 0;
 // static double PF=0, VF=0, QF=0;
 
 // Wi-Fi credentials
-const char *ssid = "Fontana";
-const char *password = "@678fontana786";
+const char *wifiSSID = "Fontana";
+const char *wifiPassword = "@678fontana786";
+
+// Web server credentials
+const char *serverUrl = "http://192.168.0.156";
+const int serverPort = 3001;
 
 // definiçoes dos núcleos
 // %%% podemos usar os dois núcleos agora
@@ -643,61 +646,52 @@ void CPT(double ua, double ia)
   CPT_Val.VF = 1 - CPT_Val.D / CPT_Val.A;
 }
 
-//*********************************************//
-// TAREFAS - FREERTOS
-//*********************************************//
-
-void httpRequestTask(void *pvParameters)
+void sendPostRequest(String endpoint, String payload)
 {
-  while (1)
+  HTTPClient http;
+
+  String webServer = "";
+  webServer += serverUrl;
+  webServer += ":";
+  webServer += serverPort;
+  webServer += endpoint;
+
+  Serial.println("Connecting to server...");
+  if (http.begin(webServer))
   {
-    WiFiClient client;
+    Serial.println("Connected to server");
 
-    Serial.println("Connecting to server...");
-    if (client.connect("192.168.0.156", 3001))
+    // Set the content type header
+    http.addHeader("Content-Type", "application/json");
+
+    // Send the POST request with the JSON body
+    int httpResponseCode = http.POST(payload);
+
+    // Check if the request was successful
+    if (httpResponseCode > 0)
     {
-      Serial.println("Connected to server");
-
-      // Set the request body
-      String requestBody = "";
-      requestBody += "voltage=";
-      requestBody += 999;
-      requestBody += "&current=";
-      requestBody += 888;
-      requestBody += "&collect_time=";
-      requestBody += "2020-12-20 20:20:20.000";
-      Serial.println(requestBody);
-
-      HTTPClient http;
-      http.begin(client, "http://192.168.0.156", 3001, "/api/hairdryer");
-      http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-      int httpResponseCode = http.POST(requestBody);
-
-      if (httpResponseCode > 0)
-      {
-        String response = http.getString();
-        Serial.println(httpResponseCode);
-        Serial.println(response);
-      }
-      else
-      {
-        Serial.println("Error on HTTP request");
-        Serial.println(httpResponseCode);
-      }
-
-      http.end();
-      client.stop();
-      Serial.println("Connection closed");
+      // Print the response payload
+      Serial.println(http.getString());
     }
     else
     {
-      Serial.println("Connection failed");
+      Serial.print("Error sending HTTP request: ");
+      Serial.println(http.getString());
     }
 
-    // Wait for 3 seconds before making the next request
-    vTaskDelay(3000 / portTICK_PERIOD_MS);
+    // Close the connection
+    http.end();
+    Serial.println("Connection closed");
+  }
+  else
+  {
+    Serial.println("Connection failed");
   }
 }
+
+//*********************************************//
+// TAREFAS - FREERTOS
+//*********************************************//
 
 // Tarefa do terminal serial (doCLI)
 void doCLI(void *parameters)
@@ -738,6 +732,38 @@ void doCLI(void *parameters)
         // imprimir nova linha no terminal serial
         Serial.print("\r\n");
         cmd_buf[idx - 1] = '\0';
+
+        // Building training database with collected samples
+        if (strcmp(cmd_buf, "get_samples") == 0)
+        {
+          fft(iComp, SAMPLES);
+
+          String json = "";
+          json += "{";
+
+          for (int ord = 1; ord < (SAMPLES / 4); ord += 2)
+          {
+            float mag = fftMagnitude(vComp, SAMPLES, ord);
+
+            json += "\"fft";
+
+            if (ord < 10)
+            {
+              json += "0";
+            }
+
+            json += ord;
+            json += "\": ";
+            json += String(mag);
+            json += ",";
+          }
+
+          json += "\"applianceId\": 1";
+          json += "}";
+
+          sendPostRequest("/samples", json);
+        }
+
         // valor médio do sinal da tensão (ADC)
         if (strcmp(cmd_buf, v_command1) == 0)
         {
@@ -1155,18 +1181,25 @@ void setup()
   // Aguarde um momento para começar (por conta da inicialização da Serial)
   vTaskDelay(1000 / portTICK_PERIOD_MS);
   Serial.println();
-  Serial.println("---FreeRTOS---");
+  Serial.println("--- Energy Monitoring ESP32 ---");
 
   // Connect to WiFi
-  WiFi.begin(ssid, password);
+  WiFi.begin(wifiSSID, wifiPassword);
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(1000);
-    Serial.println("Connecting to WiFi...");
+    Serial.println("[WiFi] Connecting to WiFi...");
   }
-  Serial.println("Connected to WiFi");
-  Serial.print("ESP32 IP address: ");
-  Serial.println(WiFi.localIP());
+  Serial.println("[WiFi] Connected to WiFi");
+
+  // Print the SSID of the network
+  Serial.print("[WiFi] SSID: ");
+  Serial.println(WiFi.SSID());
+
+  // Print WiFi shield's IP address
+  IPAddress ip = WiFi.localIP();
+  Serial.print("[WiFi] IP Address: ");
+  Serial.println(ip);
 
   // criando o semáforo de leitura (ISR)
   sem_done_reading = xSemaphoreCreateBinary();
@@ -1191,7 +1224,7 @@ void setup()
 
   // Tarefa que recebe do client os comandos de interesse e faz o comando.
   xTaskCreatePinnedToCore(doCLI, "Interface do Cliente",
-                          2048, NULL, 1,
+                          8000, NULL, 1,
                           NULL, app_cpu);
   // Tarefa que trata da aquisição da tensão
   xTaskCreatePinnedToCore(calcAverage, "Tensão",
@@ -1201,10 +1234,6 @@ void setup()
   xTaskCreatePinnedToCore(icalcAverage, "Corrente",
                           8000, NULL, 2,
                           &i_processing_task, pro_cpu);
-  // Create the HTTP request task
-  xTaskCreatePinnedToCore(httpRequestTask, "HTTP Request Task",
-                          4096, NULL, 1,
-                          NULL, app_cpu);
 
   vTaskDelete(NULL);
 }

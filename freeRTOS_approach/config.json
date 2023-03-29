@@ -1,8 +1,0 @@
-{
-    "wifi_ssid": "INSERT_SSID",
-    "wifi_password": "INSERT_PASSWORD",
-    "mysql_server": "INSERT_SERVER",
-    "mysql_user": "INSERT_USER",
-    "mysql_password": "INSERT_PASSWORD",
-    "mysql_database": "INSERT_database"
-}
