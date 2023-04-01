@@ -736,32 +736,42 @@ void doCLI(void *parameters)
         // Building training database with collected samples
         if (strcmp(cmd_buf, "get_samples") == 0)
         {
-          fft(iComp, SAMPLES);
-
-          String json = "";
-          json += "{";
-
-          for (int ord = 1; ord < (SAMPLES / 4); ord += 2)
+          int numOfSamples = 5;
+          int aux = 0;
+          while (aux < numOfSamples)
           {
-            float mag = fftMagnitude(vComp, SAMPLES, ord);
+            fft(iComp, SAMPLES);
 
-            json += "\"fft";
+            String json = "";
+            json += "{";
 
-            if (ord < 10)
+            for (int ord = 1; ord < (SAMPLES / 4); ord += 2)
             {
-              json += "0";
+              float mag = fftMagnitude(iComp, SAMPLES, ord);
+
+              json += "\"fft";
+
+              if (ord < 10)
+              {
+                json += "0";
+              }
+
+              json += String(ord);
+              json += "\": ";
+              json += String(mag);
+              json += ",";
             }
 
-            json += ord;
-            json += "\": ";
-            json += String(mag);
-            json += ",";
+            json += "\"applianceId\": 1";
+            json += "}";
+
+            Serial.println(json);
+
+            sendPostRequest("/samples", json);
+
+            aux++;
+            delay(5000);
           }
-
-          json += "\"applianceId\": 1";
-          json += "}";
-
-          sendPostRequest("/samples", json);
         }
 
         // valor médio do sinal da tensão (ADC)
