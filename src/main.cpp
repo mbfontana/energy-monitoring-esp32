@@ -118,10 +118,6 @@ static double Iu = 0;
 const char *wifiSSID = "Fontana";
 const char *wifiPassword = "@678fontana786";
 
-// Web server credentials
-const char *serverUrl = "http://192.168.0.156";
-const int serverPort = 3001;
-
 // definiçoes dos núcleos
 // %%% podemos usar os dois núcleos agora
 static const BaseType_t pro_cpu = 0;
@@ -650,14 +646,8 @@ void sendPostRequest(String endpoint, String payload)
 {
   HTTPClient http;
 
-  String webServer = "";
-  webServer += serverUrl;
-  webServer += ":";
-  webServer += serverPort;
-  webServer += endpoint;
-
   Serial.println("Connecting to server...");
-  if (http.begin(webServer))
+  if (http.begin(endpoint))
   {
     Serial.println("Connected to server");
 
@@ -733,12 +723,46 @@ void doCLI(void *parameters)
         Serial.print("\r\n");
         cmd_buf[idx - 1] = '\0';
 
+        // Predict monitored appliances
+        if (strcmp(cmd_buf, "predict") == 0)
+        {
+          fft(iComp, SAMPLES);
+
+          String json = "";
+          json += "{";
+
+          for (int ord = 1; ord < (SAMPLES / 4); ord += 2)
+          {
+            float mag = fftMagnitude(iComp, SAMPLES, ord);
+
+            json += "\"fft";
+
+            if (ord < 10)
+            {
+              json += "0";
+            }
+
+            json += String(ord);
+            json += "\": ";
+            json += String(mag);
+            if (ord != 31)
+            {
+              json += ",";
+            }
+          }
+
+          json += "}";
+
+          Serial.println(json);
+
+          sendPostRequest("http://192.168.0.156:3002/predict", json);
+        }
+
         // Building training database with collected samples
         if (strcmp(cmd_buf, "get_samples") == 0)
         {
-          int numOfSamples = 5;
-          int aux = 0;
-          while (aux < numOfSamples)
+          int numOfSamples = 0;
+          while (numOfSamples < 50)
           {
             fft(iComp, SAMPLES);
 
@@ -762,16 +786,17 @@ void doCLI(void *parameters)
               json += ",";
             }
 
-            json += "\"applianceId\": 1";
+            json += "\"applianceId\": 19"; // Airfryer
             json += "}";
 
-            Serial.println(json);
+            sendPostRequest("http://192.168.0.156:3001/samples", json);
 
-            sendPostRequest("/samples", json);
-
-            aux++;
-            delay(5000);
+            numOfSamples++;
+            delay(3000);
           }
+          Serial.println();
+          Serial.println("Collected and sent all samples sucessfully.");
+          Serial.println();
         }
 
         // valor médio do sinal da tensão (ADC)
