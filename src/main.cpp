@@ -170,6 +170,7 @@ static hw_timer_t *itimer = NULL;
 // handles dos semáforos, estados críticos
 static TaskHandle_t processing_task = NULL;
 static TaskHandle_t i_processing_task = NULL;
+static TaskHandle_t cpt_task = NULL;
 static SemaphoreHandle_t sem_done_reading = NULL;
 static SemaphoreHandle_t i_sem_done_reading = NULL;
 static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
@@ -206,6 +207,16 @@ static double Irms;
 static double FP;
 static double DHTV;
 static double DHTI;
+
+// Variables to compare apparent power
+static double A_app_old = 0.0;
+static double A_app = 0.0;
+
+// Variables to define sampling parameters
+int appliance_id = 0;
+int sample_num = 0;
+int sample_delay = 0;
+int aux_sample = 0;
 
 // variáveis de calibração
 esp_adc_cal_characteristics_t adc_chars;
@@ -679,6 +690,69 @@ void sendPostRequest(String endpoint, String payload)
   }
 }
 
+void compareAppPower(double A_old, double A)
+{
+  delay(500);
+  double variation = A_old * 0.1;
+
+  if (A > (A_old + variation))
+  {
+    Serial.println("Connected");
+    Serial.print("A_old: ");
+    Serial.println(A_old);
+    Serial.print("A: ");
+    Serial.println(A);
+    predict("Connected");
+  }
+  else if (A < (A_old - variation))
+  {
+    Serial.println("Disconnected");
+    Serial.print("A_old: ");
+    Serial.println(A_old);
+    Serial.print("A: ");
+    Serial.println(A);
+    predict("Disconnected");
+  }
+}
+
+void predict(String comparison)
+{
+  fft(iComp, SAMPLES);
+
+  String json = "";
+  json += "{";
+  json += "\"comparison\": \"";
+  json += comparison;
+  json += "\"";
+  json += ",";
+
+  for (int ord = 1; ord < (SAMPLES / 4); ord += 2)
+  {
+    float mag = fftMagnitude(iComp, SAMPLES, ord);
+
+    json += "\"fft";
+
+    if (ord < 10)
+    {
+      json += "0";
+    }
+
+    json += String(ord);
+    json += "\": ";
+    json += String(mag);
+    if (ord != 31)
+    {
+      json += ",";
+    }
+  }
+
+  json += "}";
+
+  Serial.println(json);
+
+  sendPostRequest("http://192.168.0.156:3002/predict", json);
+}
+
 //*********************************************//
 // TAREFAS - FREERTOS
 //*********************************************//
@@ -723,46 +797,32 @@ void doCLI(void *parameters)
         Serial.print("\r\n");
         cmd_buf[idx - 1] = '\0';
 
-        // Predict monitored appliances
-        if (strcmp(cmd_buf, "predict") == 0)
+        // Defining applaince sampling parameters
+        if (strncmp(cmd_buf, "define_sample_id:", 17) == 0)
         {
-          fft(iComp, SAMPLES);
-
-          String json = "";
-          json += "{";
-
-          for (int ord = 1; ord < (SAMPLES / 4); ord += 2)
-          {
-            float mag = fftMagnitude(iComp, SAMPLES, ord);
-
-            json += "\"fft";
-
-            if (ord < 10)
-            {
-              json += "0";
-            }
-
-            json += String(ord);
-            json += "\": ";
-            json += String(mag);
-            if (ord != 31)
-            {
-              json += ",";
-            }
-          }
-
-          json += "}";
-
-          Serial.println(json);
-
-          sendPostRequest("http://192.168.0.156:3002/predict", json);
+          appliance_id = atoi(&cmd_buf[17]);
+          Serial.print("Defined new appliance id for sampling: ");
+          Serial.println(appliance_id);
+        }
+        if (strncmp(cmd_buf, "define_sample_num:", 18) == 0)
+        {
+          sample_num = atoi(&cmd_buf[18]);
+          Serial.print("Defined new sample num for sampling: ");
+          Serial.println(sample_num);
+        }
+        if (strncmp(cmd_buf, "define_sample_delay:", 20) == 0)
+        {
+          sample_delay = atoi(&cmd_buf[20]);
+          Serial.print("Defined new sample num for sampling: ");
+          Serial.println(sample_delay);
         }
 
         // Building training database with collected samples
         if (strcmp(cmd_buf, "get_samples") == 0)
         {
           int numOfSamples = 0;
-          while (numOfSamples < 50)
+
+          while (numOfSamples < sample_num)
           {
             fft(iComp, SAMPLES);
 
@@ -786,13 +846,23 @@ void doCLI(void *parameters)
               json += ",";
             }
 
-            json += "\"applianceId\": 19"; // Airfryer
+            json += "\"applianceId\": ";
+            json += String(appliance_id);
             json += "}";
 
             sendPostRequest("http://192.168.0.156:3001/samples", json);
 
             numOfSamples++;
-            delay(3000);
+            Serial.print("Sample: [");
+            Serial.print(numOfSamples);
+            Serial.println("]");
+
+            aux_sample++;
+            Serial.print("Aggr: [");
+            Serial.print(aux_sample);
+            Serial.println("]");
+
+            delay(sample_delay);
           }
           Serial.println();
           Serial.println("Collected and sent all samples sucessfully.");
@@ -838,19 +908,8 @@ void doCLI(void *parameters)
         // valor eficaz da tensão
         if (strcmp(cmd_buf, v_command5) == 0)
         {
-          sum_signal = 0;
-          for (int aux = 0; aux < 5; aux++)
-          {
-            for (int i = 0; i < 2 * SAMPLES; i++)
-            {
-              val_signal = ((float)vComp[i]);
-              if (i % 2 == 0)
-                sum_signal += val_signal * val_signal;
-            }
-          }
-          rms = sqrt(sum_signal / (SAMPLES * 5));
-          Vrms = rms;
-          Serial.println((double)rms);
+          Vrms = calculateRMS("V");
+          Serial.println(Vrms);
         }
         // valor médio da corrente (ADC)
         if (strcmp(cmd_buf, i_command1) == 0)
@@ -891,19 +950,8 @@ void doCLI(void *parameters)
         // valor eficaz da corrente
         if (strcmp(cmd_buf, i_command5) == 0)
         {
-          sum_signal = 0;
-          for (int aux = 0; aux < 5; aux++)
-          {
-            for (int i = 0; i < 2 * SAMPLES; i++)
-            {
-              val_signal = ((float)iComp[i]);
-              if (i % 2 == 0)
-                sum_signal += val_signal * val_signal;
-            }
-          }
-          i_rms = sqrt(sum_signal / (SAMPLES * 5));
-          Irms = (double)i_rms;
-          Serial.println((double)i_rms);
+          Irms = calculateRMS("I");
+          Serial.println(Irms);
         }
         // um ciclo do sinal instantâneo da tensão e corrente
         if (strcmp(cmd_buf, vi_command1) == 0)
@@ -972,24 +1020,9 @@ void doCLI(void *parameters)
             }
           }
         }
-        // cálculo da cpt
+        // Display CPT values
         if (strcmp(cmd_buf, cpt_command1) == 0)
         {
-          int kk = 0;
-          for (int j = 0; j < 3; j++)
-          {
-            kk = 0;
-            for (int i = 0; i < 2 * SAMPLES; i++)
-            {
-              if (i % 2 == 0)
-              {
-                tensao_instantanea[j * SAMPLES + kk] = vComp[i];
-                corrente_instantanea[j * SAMPLES + kk] = iComp[i];
-                CPT(tensao_instantanea[j * SAMPLES + kk], corrente_instantanea[j * SAMPLES + kk]);
-                kk++;
-              }
-            }
-          }
           Serial.print("A = ");
           Serial.println(CPT_Val.A);
           Serial.print("Q = ");
@@ -1094,6 +1127,66 @@ void doCLI(void *parameters)
     }
     // Não seja egoísta, deixe a CPU ser usada pelos outros
     vTaskDelay(cli_delay / portTICK_PERIOD_MS);
+  }
+}
+
+double calculateRMS(String metric)
+{
+  double sum_signal = 0.0;
+  double val_signal = 0.0;
+  double rms = 0.0;
+
+  if (metric == "I")
+  {
+    sum_signal = 0;
+    for (int aux = 0; aux < 5; aux++)
+    {
+      for (int i = 0; i < 2 * SAMPLES; i++)
+      {
+        val_signal = ((float)iComp[i]);
+        if (i % 2 == 0)
+          sum_signal += val_signal * val_signal;
+      }
+    }
+    rms = sqrt(sum_signal / (SAMPLES * 5));
+    return rms;
+  }
+  else if (metric == "V")
+  {
+    sum_signal = 0;
+    for (int aux = 0; aux < 5; aux++)
+    {
+      for (int i = 0; i < 2 * SAMPLES; i++)
+      {
+        val_signal = ((float)vComp[i]);
+        if (i % 2 == 0)
+          sum_signal += val_signal * val_signal;
+      }
+    }
+    rms = sqrt(sum_signal / (SAMPLES * 5));
+    return rms;
+  }
+  else
+  {
+    return 0;
+  }
+}
+
+// Task to calculate CPT values
+void calcAppPower(void *parameters)
+{
+  delay(5000);
+  while (1)
+  {
+    Vrms = calculateRMS("V");
+    Irms = calculateRMS("I");
+    A_app = Vrms * Irms;
+
+    if (A_app <= 100)
+      A_app = 0;
+
+    compareAppPower(A_app_old, A_app);
+    A_app_old = A_app;
   }
 }
 
@@ -1269,6 +1362,10 @@ void setup()
   xTaskCreatePinnedToCore(icalcAverage, "Corrente",
                           8000, NULL, 2,
                           &i_processing_task, pro_cpu);
+  // Task to calculate CPT values
+  xTaskCreatePinnedToCore(calcAppPower, "CPT",
+                          8000, NULL, 1,
+                          &cpt_task, app_cpu);
 
   vTaskDelete(NULL);
 }
