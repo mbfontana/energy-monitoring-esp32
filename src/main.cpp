@@ -222,6 +222,8 @@ int aux_sample = 0;
 esp_adc_cal_characteristics_t adc_chars;
 esp_adc_cal_characteristics_t adc_chars_i;
 
+static int predictedApplianceId = 0;
+
 // estrutura de troca do buffer circular de tensão
 void IRAM_ATTR swap()
 {
@@ -690,6 +692,48 @@ void sendPostRequest(String endpoint, String payload)
   }
 }
 
+double calculateRMS(String metric)
+{
+  double sum_signal = 0.0;
+  double val_signal = 0.0;
+  double rms = 0.0;
+
+  if (metric == "I")
+  {
+    sum_signal = 0;
+    for (int aux = 0; aux < 5; aux++)
+    {
+      for (int i = 0; i < 2 * SAMPLES; i++)
+      {
+        val_signal = ((float)iComp[i]);
+        if (i % 2 == 0)
+          sum_signal += val_signal * val_signal;
+      }
+    }
+    rms = sqrt(sum_signal / (SAMPLES * 5));
+    return rms;
+  }
+  else if (metric == "V")
+  {
+    sum_signal = 0;
+    for (int aux = 0; aux < 5; aux++)
+    {
+      for (int i = 0; i < 2 * SAMPLES; i++)
+      {
+        val_signal = ((float)vComp[i]);
+        if (i % 2 == 0)
+          sum_signal += val_signal * val_signal;
+      }
+    }
+    rms = sqrt(sum_signal / (SAMPLES * 5));
+    return rms;
+  }
+  else
+  {
+    return 0;
+  }
+}
+
 void compareAppPower(double A_old, double A)
 {
   delay(500);
@@ -702,7 +746,9 @@ void compareAppPower(double A_old, double A)
     Serial.println(A_old);
     Serial.print("A: ");
     Serial.println(A);
-    predict("Connected");
+
+    String applianceId = predict("Connected");
+    registerConnection(A, applianceId);
   }
   else if (A < (A_old - variation))
   {
@@ -711,11 +757,13 @@ void compareAppPower(double A_old, double A)
     Serial.println(A_old);
     Serial.print("A: ");
     Serial.println(A);
-    predict("Disconnected");
+
+    String applianceId = predict("Disconnected");
+    registerDisconnection(applianceId);
   }
 }
 
-void predict(String comparison)
+String predict(String comparison)
 {
   fft(iComp, SAMPLES);
 
@@ -750,7 +798,103 @@ void predict(String comparison)
 
   Serial.println(json);
 
-  sendPostRequest("http://192.168.0.156:3002/predict", json);
+  HTTPClient http;
+  Serial.println("Connecting to server...");
+  if (http.begin("http://192.168.0.156:3002/predict"))
+  {
+    Serial.println("Connected to server");
+
+    // Set the content type header
+    http.addHeader("Content-Type", "application/json");
+
+    // Send the POST request with the JSON body
+    int httpResponseCode = http.POST(json);
+    String res = http.getString();
+
+    // Check if the request was successful
+    if (httpResponseCode > 0)
+    {
+      // Print the response payload
+      Serial.println(res);
+      String appliance_id = res;
+      return appliance_id;
+    }
+    else
+    {
+      Serial.print("Error sending HTTP request: ");
+      Serial.println(http.getString());
+    }
+    // Close the connection
+    http.end();
+    Serial.println("Connection closed");
+  }
+  else
+  {
+    Serial.println("Connection failed");
+  }
+  return "-1";
+}
+
+void registerConnection(double realPower, String appliance_id)
+{
+  const char *ntpServer = "pool.ntp.org";
+  const long gmtOffset_sec = 0;
+  const int daylightOffset_sec = 3600;
+
+  // Get the current time
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo))
+  {
+    Serial.println("Failed to obtain time");
+    return;
+  }
+
+  String formatedTime = String(timeinfo.tm_year + 1900) + "-" +
+                        String(timeinfo.tm_mon + 1) + "-" +
+                        String(timeinfo.tm_mday) + " " +
+                        String(timeinfo.tm_hour) + ":" +
+                        String(timeinfo.tm_min) + ":" +
+                        String(timeinfo.tm_sec);
+
+  appliance_id.remove(appliance_id.length() - 1);
+
+  String json = "{\"realPower\": \"" + String(realPower) + "\",\"timeStamp\": \"" + formatedTime + "\",\"applianceId\": \"" + appliance_id + "\"}";
+
+  Serial.println(json);
+
+  sendPostRequest("http://192.168.0.156:3001/connected", json);
+}
+
+void registerDisconnection(String appliance_id)
+{
+  const char *ntpServer = "pool.ntp.org";
+  const long gmtOffset_sec = 0;
+  const int daylightOffset_sec = 3600;
+
+  // Get the current time
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo))
+  {
+    Serial.println("Failed to obtain time");
+    return;
+  }
+
+  String formatedTime = String(timeinfo.tm_year + 1900) + "-" +
+                        String(timeinfo.tm_mon + 1) + "-" +
+                        String(timeinfo.tm_mday) + " " +
+                        String(timeinfo.tm_hour) + ":" +
+                        String(timeinfo.tm_min) + ":" +
+                        String(timeinfo.tm_sec);
+
+  appliance_id.remove(appliance_id.length() - 1);
+
+  String json = "{\"applianceId\": \"" + appliance_id + "\",\"timeStamp\": \"" + formatedTime + "\"}";
+
+  Serial.println(json);
+
+  sendPostRequest("http://192.168.0.156:3001/disconnected", json);
 }
 
 //*********************************************//
@@ -797,7 +941,7 @@ void doCLI(void *parameters)
         Serial.print("\r\n");
         cmd_buf[idx - 1] = '\0';
 
-        // Defining applaince sampling parameters
+        // Defining appliance sampling parameters
         if (strncmp(cmd_buf, "define_sample_id:", 17) == 0)
         {
           appliance_id = atoi(&cmd_buf[17]);
@@ -977,7 +1121,7 @@ void doCLI(void *parameters)
               {
                 Serial.print((float)vComp[i]);
                 Serial.print(" ");
-                Serial.println((float)iComp[i]);
+                Serial.println((float)iComp[i] * 10);
               }
             }
           }
@@ -1023,6 +1167,21 @@ void doCLI(void *parameters)
         // Display CPT values
         if (strcmp(cmd_buf, cpt_command1) == 0)
         {
+          int kk = 0;
+          for (int j = 0; j < 3; j++)
+          {
+            kk = 0;
+            for (int i = 0; i < 2 * SAMPLES; i++)
+            {
+              if (i % 2 == 0)
+              {
+                tensao_instantanea[j * SAMPLES + kk] = vComp[i];
+                corrente_instantanea[j * SAMPLES + kk] = iComp[i];
+                CPT(tensao_instantanea[j * SAMPLES + kk], corrente_instantanea[j * SAMPLES + kk]);
+                kk++;
+              }
+            }
+          }
           Serial.print("A = ");
           Serial.println(CPT_Val.A);
           Serial.print("Q = ");
@@ -1127,48 +1286,6 @@ void doCLI(void *parameters)
     }
     // Não seja egoísta, deixe a CPU ser usada pelos outros
     vTaskDelay(cli_delay / portTICK_PERIOD_MS);
-  }
-}
-
-double calculateRMS(String metric)
-{
-  double sum_signal = 0.0;
-  double val_signal = 0.0;
-  double rms = 0.0;
-
-  if (metric == "I")
-  {
-    sum_signal = 0;
-    for (int aux = 0; aux < 5; aux++)
-    {
-      for (int i = 0; i < 2 * SAMPLES; i++)
-      {
-        val_signal = ((float)iComp[i]);
-        if (i % 2 == 0)
-          sum_signal += val_signal * val_signal;
-      }
-    }
-    rms = sqrt(sum_signal / (SAMPLES * 5));
-    return rms;
-  }
-  else if (metric == "V")
-  {
-    sum_signal = 0;
-    for (int aux = 0; aux < 5; aux++)
-    {
-      for (int i = 0; i < 2 * SAMPLES; i++)
-      {
-        val_signal = ((float)vComp[i]);
-        if (i % 2 == 0)
-          sum_signal += val_signal * val_signal;
-      }
-    }
-    rms = sqrt(sum_signal / (SAMPLES * 5));
-    return rms;
-  }
-  else
-  {
-    return 0;
   }
 }
 
@@ -1352,8 +1469,12 @@ void setup()
 
   // Tarefa que recebe do client os comandos de interesse e faz o comando.
   xTaskCreatePinnedToCore(doCLI, "Interface do Cliente",
-                          8000, NULL, 1,
+                          3000, NULL, 1,
                           NULL, app_cpu);
+  // Task to calculate CPT values
+  xTaskCreatePinnedToCore(calcAppPower, "CPT",
+                          13000, NULL, 1,
+                          &cpt_task, app_cpu);
   // Tarefa que trata da aquisição da tensão
   xTaskCreatePinnedToCore(calcAverage, "Tensão",
                           8000, NULL, 2,
@@ -1362,10 +1483,6 @@ void setup()
   xTaskCreatePinnedToCore(icalcAverage, "Corrente",
                           8000, NULL, 2,
                           &i_processing_task, pro_cpu);
-  // Task to calculate CPT values
-  xTaskCreatePinnedToCore(calcAppPower, "CPT",
-                          8000, NULL, 1,
-                          &cpt_task, app_cpu);
 
   vTaskDelete(NULL);
 }
