@@ -1416,76 +1416,104 @@ void icalcAverage(void *parameters)
 //*****************************************************************************
 // Main (rodando neste caso no core 1, prioridade 1 - automático)
 
-void setup()
-{
-  adc1_config_width(ADC_WIDTH_12Bit);
-  adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
-  adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_11);
-  // Configurando a Serial
+void setup() {
+  // Configure the ADC resolution to 12-bit for high precision (0-4095 values)
+  adc1_config_width(ADC_WIDTH_BIT_12);
+
+  // Configure ADC channel attenuation to 11 dB:
+  // This expands the input voltage range up to approximately 3.3V,
+  // allowing accurate readings for both sensors.
+  adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11); // Voltage sensor
+  adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_11); // Current sensor
+
+  // Initialize the Serial Monitor for debugging and logging
   Serial.begin(115200);
-  // Aguarde um momento para começar (por conta da inicialização da Serial)
+
+  // Wait 1 second to ensure the Serial interface is fully initialized
   vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+  // Print project header to the Serial Monitor
   Serial.println();
   Serial.println("--- Energy Monitoring ESP32 ---");
 
-  // Connect to WiFi
+  // Connect to WiFi using provided credentials
   WiFi.begin(wifiSSID, wifiPassword);
-  while (WiFi.status() != WL_CONNECTED)
-  {
+
+  // Wait until the WiFi connection is established
+  while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.println("[WiFi] Connecting to WiFi...");
   }
+
+  // Confirm successful connection to WiFi
   Serial.println("[WiFi] Connected to WiFi");
 
-  // Print the SSID of the network
+  // Print the WiFi network SSID
   Serial.print("[WiFi] SSID: ");
   Serial.println(WiFi.SSID());
 
-  // Print WiFi shield's IP address
+  // Print the device's assigned IP address
   IPAddress ip = WiFi.localIP();
   Serial.print("[WiFi] IP Address: ");
   Serial.println(ip);
 
-  // criando o semáforo de leitura (ISR)
+  // Create a semaphore for reading data (used in interrupt routines)
   sem_done_reading = xSemaphoreCreateBinary();
-  // Força a reinicialização se o semáforo não for criado
-  if (sem_done_reading == NULL)
-  {
-    Serial.println("Não foi possível criar um ou mais semáforos");
-    ESP.restart();
+
+  // Restart the ESP32 if semaphore creation fails
+  if (sem_done_reading == NULL) {
+    Serial.println("Failed to create one or more semaphores");
+    ESP.restart(); // Restart to recover
   }
+
+  // Create another semaphore for reading current values
   i_sem_done_reading = xSemaphoreCreateBinary();
-  // Força a reinicialização se o semáforo não for criado
-  if (i_sem_done_reading == NULL)
-  {
-    Serial.println("Não foi possível criar um ou mais semáforos");
-    ESP.restart();
+
+  // Restart if this semaphore also fails
+  if (i_sem_done_reading == NULL) {
+    Serial.println("Failed to create one or more semaphores");
+    ESP.restart(); // Restart to recover
   }
-  // iniciando o semáforo como 1
+
+  // Initialize both semaphores to "available" (value = 1)
   xSemaphoreGive(sem_done_reading);
   xSemaphoreGive(i_sem_done_reading);
-  // Criando a fila, antes de ser usada na mensagem
+
+  // Create a message queue for communication between tasks
   msg_queue = xQueueCreate(MSG_QUEUE_LEN, sizeof(Message));
 
-  // Tarefa que recebe do client os comandos de interesse e faz o comando.
-  xTaskCreatePinnedToCore(doCLI, "Interface do Cliente",
+  // Ensure queue creation was successful
+  if (msg_queue == NULL) {
+    Serial.println("Failed to create the message queue");
+    ESP.restart(); // Restart to recover
+  }
+
+  // Create tasks for handling various parts of the system
+
+  // Task 1: Client interface for processing commands
+  xTaskCreatePinnedToCore(doCLI, "Client Interface",
                           3000, NULL, 1,
                           NULL, app_cpu);
-  // Task to calculate CPT values
-  xTaskCreatePinnedToCore(calcAppPower, "CPT",
+
+  // Task 2: Calculate power-related metrics (e.g., power factor)
+  xTaskCreatePinnedToCore(calcAppPower, "Power Metrics (CPT)",
                           13000, NULL, 1,
                           &cpt_task, app_cpu);
-  // Tarefa que trata da aquisição da tensão
-  xTaskCreatePinnedToCore(calcAverage, "Tensão",
+
+  // Task 3: Process voltage data and calculate averages
+  xTaskCreatePinnedToCore(calcAverage, "Voltage Processing",
                           8000, NULL, 2,
                           &processing_task, pro_cpu);
-  // Tarefa que trata da aquisição da corrente
-  xTaskCreatePinnedToCore(icalcAverage, "Corrente",
+
+  // Task 4: Process current data and calculate averages
+  xTaskCreatePinnedToCore(icalcAverage, "Current Processing",
                           8000, NULL, 2,
                           &i_processing_task, pro_cpu);
 
+  // Delete the current setup task (no longer needed after initialization)
   vTaskDelete(NULL);
 }
+
 
 void loop()
 {
