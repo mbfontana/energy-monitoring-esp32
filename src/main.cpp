@@ -1426,33 +1426,23 @@ void setup() {
   adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11); // Voltage sensor
   adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_11); // Current sensor
 
-  // Initialize the Serial Monitor for debugging and logging
   Serial.begin(115200);
-
-  // Wait 1 second to ensure the Serial interface is fully initialized
+  
   vTaskDelay(1000 / portTICK_PERIOD_MS);
 
-  // Print project header to the Serial Monitor
   Serial.println();
   Serial.println("--- Energy Monitoring ESP32 ---");
 
   // Connect to WiFi using provided credentials
   WiFi.begin(wifiSSID, wifiPassword);
-
-  // Wait until the WiFi connection is established
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.println("[WiFi] Connecting to WiFi...");
   }
-
-  // Confirm successful connection to WiFi
   Serial.println("[WiFi] Connected to WiFi");
-
-  // Print the WiFi network SSID
   Serial.print("[WiFi] SSID: ");
   Serial.println(WiFi.SSID());
 
-  // Print the device's assigned IP address
   IPAddress ip = WiFi.localIP();
   Serial.print("[WiFi] IP Address: ");
   Serial.println(ip);
@@ -1460,19 +1450,17 @@ void setup() {
   // Create a semaphore for reading data (used in interrupt routines)
   sem_done_reading = xSemaphoreCreateBinary();
 
-  // Restart the ESP32 if semaphore creation fails
   if (sem_done_reading == NULL) {
     Serial.println("Failed to create one or more semaphores");
-    ESP.restart(); // Restart to recover
+    ESP.restart();
   }
 
   // Create another semaphore for reading current values
   i_sem_done_reading = xSemaphoreCreateBinary();
 
-  // Restart if this semaphore also fails
   if (i_sem_done_reading == NULL) {
     Serial.println("Failed to create one or more semaphores");
-    ESP.restart(); // Restart to recover
+    ESP.restart();
   }
 
   // Initialize both semaphores to "available" (value = 1)
@@ -1481,41 +1469,36 @@ void setup() {
 
   // Create a message queue for communication between tasks
   msg_queue = xQueueCreate(MSG_QUEUE_LEN, sizeof(Message));
-
-  // Ensure queue creation was successful
   if (msg_queue == NULL) {
     Serial.println("Failed to create the message queue");
-    ESP.restart(); // Restart to recover
+    ESP.restart();
   }
 
-  // Create tasks for handling various parts of the system
-
-  // Task 1: Client interface for processing commands
+  // Task 1 in 1st CORE: Client interface for processing commands
   xTaskCreatePinnedToCore(doCLI, "Client Interface",
                           3000, NULL, 1,
                           NULL, app_cpu);
 
-  // Task 2: Calculate power-related metrics (e.g., power factor)
+  // Task 2 in 1st CORE: Calculate power-related metrics (e.g., power factor)
   xTaskCreatePinnedToCore(calcAppPower, "Power Metrics (CPT)",
                           13000, NULL, 1,
                           &cpt_task, app_cpu);
 
-  // Task 3: Process voltage data and calculate averages
+  // Task 3 in 2nd CORE: Process voltage data and calculate averages
   xTaskCreatePinnedToCore(calcAverage, "Voltage Processing",
                           8000, NULL, 2,
                           &processing_task, pro_cpu);
 
-  // Task 4: Process current data and calculate averages
+  // Task 4 in 2nd CORE: Process current data and calculate averages
   xTaskCreatePinnedToCore(icalcAverage, "Current Processing",
                           8000, NULL, 2,
                           &i_processing_task, pro_cpu);
 
-  // Delete the current setup task (no longer needed after initialization)
   vTaskDelete(NULL);
 }
 
 
 void loop()
 {
-  // não deve ter nada por aqui!!!!!
+  // nothing here
 }
