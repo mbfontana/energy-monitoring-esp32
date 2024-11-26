@@ -2,34 +2,50 @@
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
 
-int readings[384];
-int i = 0, j = 0, aux = 0, samples = 384, offset = 1830;
-float convertFactor = 0.0135; // Try and error the get the right calibration factor
-unsigned long startTime=0, delta=0;
+// Constants
+const int SAMPLES = 384;           // Number of samples
+const int OFFSET = 1830;           // Calibration offset
+const float CONVERT_FACTOR = 0.0135; // Calibration factor
+const int SAMPLING_INTERVAL_US = 130; // Sampling interval in microseconds
+
+// Variables
+int readings[SAMPLES];             // ADC readings
+
+// Function Prototypes
+void setupADC();
+void collectReadings();
+float calculateRMS();
 
 void setup() {
     Serial.begin(115200);
-    adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
-    adc1_config_width(ADC_WIDTH_12Bit);
+    setupADC();
 }
 
 void loop() {
-    float sum = 0;
-      
-    for (i = 0; i < samples; i++) {
-        startTime = micros();
-        readings[i] = adc1_get_raw(ADC1_CHANNEL_6) - offset;
-        while((micros() - startTime)<130);
-    }
-
-    for (i = 0; i < samples; i++) {
-        float raw =  readings[i] * convertFactor;
-        sum += raw * raw;
-    }
-
-    float rms = sqrt(sum / samples);
-
+    collectReadings();
+    float rms = calculateRMS();
     Serial.println(rms);
-             
     delay(2000);
+}
+
+void setupADC() {
+    adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11); // 3.3V range
+    adc1_config_width(ADC_WIDTH_BIT_12);                       // 12-bit resolution
+}
+
+void collectReadings() {
+    for (int i = 0; i < SAMPLES; i++) {
+        unsigned long startTime = micros();
+        readings[i] = adc1_get_raw(ADC1_CHANNEL_6) - OFFSET;
+        while ((micros() - startTime) < SAMPLING_INTERVAL_US);
+    }
+}
+
+float calculateRMS() {
+    float sum = 0;
+    for (int i = 0; i < SAMPLES; i++) {
+        float calibratedValue = readings[i] * CONVERT_FACTOR;
+        sum += calibratedValue * calibratedValue;
+    }
+    return sqrt(sum / SAMPLES);
 }
